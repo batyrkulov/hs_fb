@@ -177,7 +177,6 @@ const createExcelFile = async (change, context) => {
       questions: [],
       answers: [],
       user: [],
-      email: [],
     }
 
     const ids = data.docs.map(doc => doc.id)
@@ -198,7 +197,7 @@ const createExcelFile = async (change, context) => {
           const addBaseElements = () => {
             res.qid.push(question.id)
             res.day.push(day.id)
-            res.questions.push(questions[question.id].question)
+            res.questions.push(questions[question.id])
           }
           let writeThisTextQuestionWithEmptyTextAnswer = true
 
@@ -209,26 +208,24 @@ const createExcelFile = async (change, context) => {
                   if (question.id === answered_question.question_id) {
                     addBaseElements()
                     res.answers.push(answered_question.text_answer)
-                    res.user.push(`${answered_user.name || ' '} ${answered_user.surname || ' '}`)
-                    res.email.push(answered_user.email)
+                    res.user.push(answered_user)
                     writeThisTextQuestionWithEmptyTextAnswer = false
                   }
                 })
               })
             } else {
-              if (questions[question.id]?.answers?.length && Array.isArray(questions[question.id]?.answers?.length)) {
+              if (questions[question.id]?.answers?.length && Array.isArray(questions[question.id]?.answers)) {
                 questions[question.id].answers.forEach(answer => {
                   let writeThisAnswerWithEmptyUser = true
                   answered_users.forEach(answered_user => {
                     answered_user.answered_questions.forEach(answered_question => {
                       if (question.id === answered_question.question_id) {
                         answered_question.answers.forEach(user_answer => {
-                          if (answer.value === user_answer) {
+                          if (answer.value == user_answer) {
                             writeThisAnswerWithEmptyUser = false
                             addBaseElements()
                             res.answers.push(answer.text)
-                            res.user.push(`${answered_user.name || ' '} ${answered_user.surname || ' '}`)
-                            res.email.push(answered_user.email)
+                            res.user.push(answered_user)
                           }
                         })
                       }
@@ -237,8 +234,7 @@ const createExcelFile = async (change, context) => {
                   if (writeThisAnswerWithEmptyUser) {
                     addBaseElements()
                     res.answers.push(answer.text)
-                    res.user.push('')
-                    res.email.push('')
+                    res.user.push(null)
                   }
                 })
               }
@@ -247,34 +243,88 @@ const createExcelFile = async (change, context) => {
             if (questions[question.id].type === 'text' && writeThisTextQuestionWithEmptyTextAnswer) {
               addBaseElements()
               res.answers.push('')
-              res.user.push('')
-              res.email.push('')
+              res.user.push(null)
             }
           }
         })
       }
     })
+    //console.log(res, 'rrrrr')
 
     const workbook = new ExcelJS.Workbook();
+    const unique_users = []
+    res.user.forEach(user => {
+      if (user && !unique_users.some(u_user => user.uid === u_user.uid))
+        unique_users.push(user)
+    })
 
-    const worksheet = workbook.addWorksheet("My Sheet");
+    sorted_days.map((day_obj) => {
+      const day = day_obj.data()
+      day.id = day_obj.id
+      if (day.questions?.length) {
+        const worksheet = workbook.addWorksheet(`Day ${day.id}`);
+        //const worksheet = { columns: [], item: [] }
 
-    worksheet.columns = [
-      { header: 'Day', key: 'day', width: 5 },
-      { header: 'Questions', key: 'questions', width: 50 },
-      { header: 'Answers', key: 'answers', width: 20, },
-      { header: 'User', key: 'user', width: 13, },
-      { header: 'Email', key: 'email', width: 13, },
-    ];
-
-    res.qid.forEach((qid, index) => {
-      worksheet.addRow({
-        day: res.day[index],
-        questions: res.questions[index],
-        answers: res.answers[index],
-        user: res.user[index],
-        email: res.email[index],
-      });
+        worksheet.columns = [
+          { header: 'User ID', key: 'user_id', width: 35 },
+          { header: 'Name', key: 'name', width: 25 },
+          { header: 'Email', key: 'email', width: 30, },
+          { header: 'Completed date', key: 'completed_date', width: 26, },
+          ...day.questions.map((question) => ({
+            header: questions[question.id].question, key: question.id, width: 80,
+          }))
+        ];
+        unique_users.forEach((user) => {
+          let isUserAnswered2QuestionsOfCurrentDay = false
+          for (let i = 0; i < res.user.length; i++) {
+            if (
+              res.user[i]
+              && res.user[i].uid === user.uid
+              && res.day[i] == day.id
+              && res.answers[i]?.length
+            ) {
+              isUserAnswered2QuestionsOfCurrentDay = true
+              break
+            }
+          }
+          if (isUserAnswered2QuestionsOfCurrentDay) {
+            //worksheet.item.push({
+            worksheet.addRow({
+              user_id: user.uid,
+              name: (`${user.name || '' } ${user.surname || ''}`),
+              email: user.email,
+              completed_date:
+                user.progress_check_days_completed_dates?.some(c_date => c_date.day == day.id)
+                  ? moment(
+                    user.progress_check_days_completed_dates.find(c_date => c_date.day == day.id).completed_at
+                  ).format('MM.DD.YYYY - hh:mm')
+                  :
+                  '',
+              ...day.questions.map((questionOfDay) => (
+                {
+                  [questionOfDay.id]: (
+                    (
+                      res.answers.filter(
+                        (answer, index, self) => (
+                          questionOfDay.id === res.questions[index].id
+                          && user.uid === res.user[index]?.uid
+                          && answer?.length
+                          && self.indexOf(answer) == index
+                        )
+                      ) || ['']
+                    )
+                  )
+                    .join(', '),
+                }
+              ))
+                .reduce((obj, item) => ({
+                  ...obj,
+                  ...item,
+                }), {})
+            });
+          }
+        })
+      }
     })
 
     // Upload exported file to Firebase Storage and remove temp file
