@@ -151,180 +151,122 @@ const createExcelFile = async (change, context) => {
   const firestore = () => db
 
   if (excelDoc.isGenerating) {
-    const usersQuery = firestore().collection('users')
-    const usersObj = await usersQuery.get()
+    const daysReady2load = firestore().collection('progress') // just ready
+    const daysFBobj = await daysReady2load.get() // fb big obj
+    //console.log(daysFBobj.docs[0].id) // id of document
+    //console.log(daysFBobj.docs[0].data()) // document properties
+    const days = daysFBobj.docs.map(day => ({
+      id: day.id,
+      questions: day.data().questions,
+    }))
+    //console.log(days[0].questions[0].id, 'dfdfdfdfd')
+
+    const ids = days.map(day => day.id)
+    ids.sort((a, b) => (parseInt(a) - parseInt(b)))
+    const sorted_days = []
+    ids.forEach(id => {
+      days.forEach(day => {
+        if (day.id === id)
+          sorted_days.push(day)
+      })
+    })
+
+    const usersReady2load = firestore().collection('users')
+    const usersFBobj = await usersReady2load.get()
     const answered_users = []
-    usersObj.docs.forEach(user_obj => {
+    usersFBobj.docs.forEach(user_obj => {
       const user = user_obj.data()
       if (user.answered_questions?.length)
         answered_users.push(user)
     })
 
-    const questionsQuery = firestore().collection('questions')
-    const questionsObj = await questionsQuery.get()
-    const questions = []
-    questionsObj.docs.forEach(question_obj => {
+    const questionsReady2load = firestore().collection('questions')
+    const questionsFBobj = await questionsReady2load.get()
+    const questions = questionsFBobj.docs.map(question_obj => {
       const question = question_obj.data()
       question.id = question_obj.id
-      questions[question.id] = question
+      return { ...question }
     })
 
-    const days = firestore().collection('progress')
-    const data = await days.get()
-    const res = {
-      qid: [],
-      day: [],
-      questions: [],
-      answers: [],
-      user: [],
-    }
+    const tabs = []
 
-    const ids = data.docs.map(doc => doc.id)
-    ids.sort((a, b) => (parseInt(a) - parseInt(b)))
-    const sorted_days = []
-    ids.forEach(id => {
-      data.docs.forEach(doc => {
-        if (doc.id === id)
-          sorted_days.push(doc)
-      })
-    })
-
-    sorted_days.map((day_obj) => {
-      const day = day_obj.data()
-      day.id = day_obj.id
-      if (day.questions?.length) {
-        day.questions.forEach((question) => {
-          const addBaseElements = () => {
-            res.qid.push(question.id)
-            res.day.push(day.id)
-            res.questions.push(questions[question.id])
-          }
-          let writeThisTextQuestionWithEmptyTextAnswer = true
-
-          if (questions[question.id]) {
-            if (questions[question.id].type === 'text') {
-              answered_users.forEach(answered_user => {
-                answered_user.answered_questions.forEach(answered_question => {
-                  if (question.id === answered_question.question_id) {
-                    addBaseElements()
-                    res.answers.push(answered_question.text_answer)
-                    res.user.push(answered_user)
-                    writeThisTextQuestionWithEmptyTextAnswer = false
-                  }
-                })
-              })
-            } else {
-              if (questions[question.id]?.answers?.length && Array.isArray(questions[question.id]?.answers)) {
-                questions[question.id].answers.forEach(answer => {
-                  let writeThisAnswerWithEmptyUser = true
-                  answered_users.forEach(answered_user => {
-                    answered_user.answered_questions.forEach(answered_question => {
-                      if (question.id === answered_question.question_id) {
-                        answered_question.answers.forEach(user_answer => {
-                          if (answer.value == user_answer) {
-                            writeThisAnswerWithEmptyUser = false
-                            addBaseElements()
-                            res.answers.push(answer.text)
-                            res.user.push(answered_user)
-                          }
-                        })
-                      }
-                    })
-                  })
-                  if (writeThisAnswerWithEmptyUser) {
-                    addBaseElements()
-                    res.answers.push(answer.text)
-                    res.user.push(null)
-                  }
-                })
-              }
-            }
-
-            if (questions[question.id].type === 'text' && writeThisTextQuestionWithEmptyTextAnswer) {
-              addBaseElements()
-              res.answers.push('')
-              res.user.push(null)
-            }
-          }
-        })
-      }
-    })
-    //console.log(res, 'rrrrr')
-
-    const workbook = new ExcelJS.Workbook();
-    const unique_users = []
-    res.user.forEach(user => {
-      if (user && !unique_users.some(u_user => user.uid === u_user.uid))
-        unique_users.push(user)
-    })
-
-    sorted_days.map((day_obj) => {
-      const day = day_obj.data()
-      day.id = day_obj.id
-      if (day.questions?.length) {
-        const worksheet = workbook.addWorksheet(`Day ${day.id}`);
-        //const worksheet = { columns: [], item: [] }
-
-        worksheet.columns = [
+    sorted_days.forEach(day => {
+      const tab = {
+        name: 'Day ' + day.id,
+        otherRows: [],
+        firstRow: [
           { header: 'User ID', key: 'user_id', width: 35 },
           { header: 'Name', key: 'name', width: 25 },
           { header: 'Email', key: 'email', width: 30, },
           { header: 'Completed date', key: 'completed_date', width: 26, },
           ...day.questions.map((question) => ({
-            header: questions[question.id].question, key: question.id, width: 80,
+            header: questions.find(question2 => (question2.id === question.id)).question, key: question.id, width: 80,
           }))
-        ];
-        unique_users.forEach((user) => {
-          let isUserAnswered2QuestionsOfCurrentDay = false
-          for (let i = 0; i < res.user.length; i++) {
-            if (
-              res.user[i]
-              && res.user[i].uid === user.uid
-              && res.day[i] == day.id
-              && res.answers[i]?.length
-            ) {
-              isUserAnswered2QuestionsOfCurrentDay = true
-              break
-            }
-          }
-          if (isUserAnswered2QuestionsOfCurrentDay) {
-            //worksheet.item.push({
-            worksheet.addRow({
-              user_id: user.uid,
-              name: (`${user.name || '' } ${user.surname || ''}`),
-              email: user.email,
-              completed_date:
-                user.progress_check_days_completed_dates?.some(c_date => c_date.day == day.id)
-                  ? moment(
-                    user.progress_check_days_completed_dates.find(c_date => c_date.day == day.id).completed_at
-                  ).format('MM.DD.YYYY - hh:mm')
-                  :
-                  '',
-              ...day.questions.map((questionOfDay) => (
-                {
-                  [questionOfDay.id]: (
-                    (
-                      res.answers.filter(
-                        (answer, index, self) => (
-                          questionOfDay.id === res.questions[index].id
-                          && user.uid === res.user[index]?.uid
-                          && answer?.length
-                          && self.indexOf(answer) == index
-                        )
-                      ) || ['']
-                    )
-                  )
-                    .join(', '),
-                }
-              ))
-                .reduce((obj, item) => ({
-                  ...obj,
-                  ...item,
-                }), {})
-            });
-          }
-        })
+        ],
       }
+      answered_users.forEach(user => {
+        if (
+          day.questions.some(
+            question => (user.answered_questions.some(
+              answered_question => answered_question.question_id === question.id)
+            )
+          )
+        ) {
+          tab.otherRows.push({
+            user_id: user.uid,
+            name: (`${user.name || ''} ${user.surname || ''}`),
+            email: user.email,
+            completed_date:
+              user.progress_check_days_completed_dates?.some(c_date => c_date.day == day.id)
+                ? moment(
+                  user.progress_check_days_completed_dates.find(c_date => c_date.day == day.id).completed_at
+                ).format('MM.DD.YYYY - hh:mm')
+                :
+                '',
+            ...day.questions.map((questionOfDay) => {
+              let answer2obj = ''
+              const found_answered_question = user.answered_questions.find(
+                answered_question => (answered_question.question_id === questionOfDay.id)
+              )
+              if (found_answered_question) {
+                if (found_answered_question.type === 'text')
+                  answer2obj = found_answered_question.text_answer
+                else if (found_answered_question.answers?.length) {
+                  found_answered_question.answers.forEach(answer => {
+                    questions.forEach(question => {
+                      if (question.id === questionOfDay.id) {
+                        if (question.answers.some(answer2 => (answer == answer2.value))) {
+                          answer2obj += (answer2obj.length ? ', ' : '') + question
+                            .answers
+                            .find(answer2 => (answer === answer2.value)).text
+                        }
+                      }
+                    })
+                  })
+                }
+              }
+              return {
+                [questionOfDay.id]: answer2obj
+              }
+            }).reduce((obj, item) => ({
+              ...obj,
+              ...item,
+            }), {})
+          });
+        }
+      })
+      tabs.push(tab)
+    })
+
+    //console.log(tabs, 'tabs')
+
+    const workbook = new ExcelJS.Workbook();
+    tabs.map((tab) => {
+      const worksheet = workbook.addWorksheet(tab.name);
+      worksheet.columns = [...tab.firstRow]
+      tab.otherRows.map(row => {
+        worksheet.addRow({ ...row })
+      })
     })
 
     // Upload exported file to Firebase Storage and remove temp file
