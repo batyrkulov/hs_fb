@@ -289,6 +289,251 @@ const createExcelFile = async (change, context) => {
   }
 }
 
+const createSecondExcelFile = async (change, context) => {
+  const excel2Doc = await change.after.data()
+  const firestore = () => db
+
+  if (excel2Doc.isGenerating) {
+    const progressesReady2load = firestore().collection('progress')
+    const progressesFBobj = await progressesReady2load.get()
+    const progresses = progressesFBobj.docs.map(ps => ({
+      id: ps.id,
+      questions: ps.data().questions,
+    }))
+
+    const questionsWithPoints = []
+    const questionsReady2load = firestore().collection('questions')
+    const questionsFBobj = await questionsReady2load.get()
+    questionsFBobj.docs.forEach(question_obj => {
+      const question = question_obj.data()
+      question.id = question_obj.id
+      question.progressDay = parseInt(
+        progresses.find(
+          progress => progress.questions.some(q => q.id === question.id)
+        )?.id
+      )
+      if (question.withPoint) questionsWithPoints.push(question)
+    })
+
+    const users_with_points = []
+    const usersReady2load = firestore().collection('users')
+    const usersFBobj = await usersReady2load.get()
+    usersFBobj.docs.forEach(user_obj => {
+      const user = user_obj.data()
+      if (user.answered_questions?.length) {
+        if (user.answered_questions.some(a_question => questionsWithPoints.some(
+          questionsWithPoint => (questionsWithPoint.id === a_question.question_id)
+        ))) {
+          users_with_points.push(user)
+        }
+      }
+    })
+
+    const tab = {
+      name: 'Results',
+      otherRows: [],
+      firstRow: [
+        { header: 'User ID', key: 'user_id', width: 35 },
+        { header: 'Name', key: 'name', width: 25 },
+        { header: 'Email', key: 'email', width: 30, },
+        { header: 'Day 1', key: 'day1', width: 15, },
+        { header: 'Day 10', key: 'day10', width: 15, },
+        { header: 'Day 20', key: 'day20', width: 15, },
+        { header: 'Day 30', key: 'day30', width: 15, },
+        { header: 'Day 40', key: 'day40', width: 15, },
+        { header: 'Results', key: 'results', width: 15, },
+        { header: 'Completion', key: 'completion', width: 15, },
+      ],
+    }
+
+    const total = {
+      day1: {
+        pointsSumm: 0,
+        usersCount: 0
+      },
+      day10: {
+        pointsSumm: 0,
+        usersCount: 0
+      },
+      day20: {
+        pointsSumm: 0,
+        usersCount: 0
+      },
+      day30: {
+        pointsSumm: 0,
+        usersCount: 0
+      },
+      day40: {
+        pointsSumm: 0,
+        usersCount: 0
+      },
+      results: {
+        pointsSumm: 0,
+        usersCount: 0
+      },
+      completion: {
+        percentsSumm: 0,
+        usersCount: 0
+      }
+    }
+
+    const calculateForUser = (user) => {
+      const userResults = {
+        day1: 0,
+        day10: 0,
+        day20: 0,
+        day30: 0,
+        day40: 0,
+        results: 0,
+        completion: 0,
+      }
+      user.answered_questions.forEach(a_question => {
+        questionsWithPoints.forEach(questionsWithPoint => {
+          if (questionsWithPoint.id === a_question.question_id && questionsWithPoint.type !== 'text') {
+            let pointOfCurrentAnsweredQuestion = 0
+            a_question.answers.forEach(answer => {
+              pointOfCurrentAnsweredQuestion += questionsWithPoint.answers.find(answer2 => answer2.value === answer).point
+            })
+            switch (questionsWithPoint.progressDay) {
+              case 1: {
+                userResults.day1 += pointOfCurrentAnsweredQuestion
+                break;
+              }
+              case 10: {
+                userResults.day10 += pointOfCurrentAnsweredQuestion
+                break;
+              }
+              case 20: {
+                userResults.day20 += pointOfCurrentAnsweredQuestion
+                break;
+              }
+              case 30: {
+                userResults.day30 += pointOfCurrentAnsweredQuestion
+                break;
+              }
+              case 40: {
+                userResults.day40 += pointOfCurrentAnsweredQuestion
+                break;
+              }
+            }
+          }
+        })
+      })
+
+      if (userResults.day1 > 0 && userResults.day40 > 0) {
+        userResults.results = (userResults.day1 - userResults.day40)
+        if (userResults.results) {
+          total.results.usersCount++
+          total.results.pointsSumm += userResults.results
+        }
+      }
+
+      if (user.progress_check_days_completed_dates?.length) {
+        userResults.completion = user.progress_check_days_completed_dates.reduce((res, curent) => {
+          return (res + [10, 20, 30, 40].some(n => n === curent.day) ? 25 : 0)
+        }, 0)
+        if (userResults.completion) {
+          total.completion.usersCount++
+          total.completion.percentsSumm += userResults.completion
+        }
+      }
+
+      if (userResults.day1) {
+        total.day1.usersCount++
+        total.day1.pointsSumm += userResults.day1
+      }
+      if (userResults.day10) {
+        total.day10.usersCount++
+        total.day10.pointsSumm += userResults.day10
+      }
+      if (userResults.day20) {
+        total.day20.usersCount++
+        total.day20.pointsSumm += userResults.day20
+      }
+      if (userResults.day30) {
+        total.day30.usersCount++
+        total.day30.pointsSumm += userResults.day30
+      }
+      if (userResults.day40) {
+        total.day40.usersCount++
+        total.day40.pointsSumm += userResults.day40
+      }
+
+      userResults.completion = (userResults.completion + '%')
+      return userResults
+    }
+
+    users_with_points.forEach(user => {
+      tab.otherRows.push({
+        user_id: user.uid,
+        name: (`${user.name || ''} ${user.surname || ''}`),
+        email: user.email,
+        ...calculateForUser(user),
+      })
+    })
+    tab.otherRows.push({
+      user_id: '',
+      name: '',
+      email: '',
+      day1: '',
+      day10: '',
+      day20: '',
+      day30: '',
+      day40: '',
+      results: '',
+      completion: '',
+    })
+    tab.otherRows.push({
+      user_id: 'TOTAL',
+      name: '',
+      email: '',
+      day1: 'Avarage result for Progress Check Day 1',
+      day10: 'Avarage result for Progress Check Day 10',
+      day20: 'Avarage result for Progress Check Day 20',
+      day30: 'Avarage result for Progress Check Day 30',
+      day40: 'Avarage result for Progress Check Day 40',
+      results: 'Avarage results',
+      completion: 'Avarage completion',
+    })
+    tab.otherRows.push({
+      user_id: '',
+      name: '',
+      email: '',
+      day1: total.day1.pointsSumm ? Math.round(total.day1.pointsSumm / total.day1.usersCount) : 0,
+      day10: total.day10.pointsSumm ? Math.round(total.day10.pointsSumm / total.day10.usersCount) : 0,
+      day20: total.day20.pointsSumm ? Math.round(total.day20.pointsSumm / total.day20.usersCount) : 0,
+      day30: total.day30.pointsSumm ? Math.round(total.day30.pointsSumm / total.day30.usersCount) : 0,
+      day40: total.day40.pointsSumm ? Math.round(total.day40.pointsSumm / total.day40.usersCount) : 0,
+      results: total.results.pointsSumm ? Math.round(total.results.pointsSumm / total.results.usersCount) : 0,
+      completion: `${total.completion.percentsSumm ? Math.round(total.completion.percentsSumm / total.completion.usersCount) : 0}%`,
+    })
+
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet(tab.name);
+    worksheet.columns = [...tab.firstRow]
+    tab.otherRows.map(row => {
+      worksheet.addRow({ ...row })
+    })
+
+    let name = moment().format('MMMM-DD-YYYY___h-mm-ss')
+    name = 'second_'+ name
+    const tempLocalFile = os.tmpdir() + '/' + name + '.xlsx'
+    return workbook.xlsx.writeFile(tempLocalFile).then(async () => {
+      await admin.storage().bucket('gs://happysneeze---app.appspot.com').upload(tempLocalFile, {
+        destination: `excel/${name}.xlsx`
+      });
+      firestore()
+        .collection("system")
+        .doc('excel2')
+        .update({
+          name,
+          isGenerating: false,
+        })
+      return null;
+    });
+  }
+}
+
 module.exports = {
   authOnCreate: functions.auth.user().onCreate(createProfile),
   sendNotificationWhenNewMessage: functions.firestore
@@ -304,4 +549,7 @@ module.exports = {
   createExcelFile: functions.firestore
     .document('system/excel')
     .onUpdate(createExcelFile),
+  createSecondExcelFile: functions.firestore
+    .document('system/excel2')
+    .onUpdate(createSecondExcelFile),
 }
