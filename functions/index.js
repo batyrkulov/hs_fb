@@ -55,7 +55,6 @@ const createProfile = async (userRecord, context) => {
     })
     .catch(console.error);
 
-
   return db
     .collection("users")
     .doc(uid)
@@ -71,6 +70,11 @@ const createProfile = async (userRecord, context) => {
       created_at: (new Date()).getTime(),
       answered_questions: [],
       fcm_token: null,
+      last_action: null,
+      got_notification_after24h_from_last_action: false,
+      got_notification_after48h_from_last_action: false,
+      first_login_at: null,
+      got_message_after6h_from_first_login: false,
     })
     .catch(console.error);
 };
@@ -111,6 +115,108 @@ const check = async (context) => {
   return null;
 }
 
+const checkUsersLastActions = async (context) => {
+  const users = db.collection('users')
+  const data = await users.get()
+  data.docs.forEach(user_obj => {
+    const user = user_obj.data()
+    if (
+      user.fcm_token
+      && user.last_action
+    ) {
+      if (
+        (user.last_action + (60000 * 60 * 24) < Date.now())
+        && !user.got_notification_after24h_from_last_action
+      ) {
+        sendPush(
+          'HappySneeze',
+          'Hey, we missed you!',
+          user.fcm_token,
+        )
+        db
+          .collection("users")
+          .doc(user.uid)
+          .update({
+            got_notification_after24h_from_last_action: true,
+          })
+      }
+      if (
+        (user.last_action + (60000 * 60 * 48) < Date.now())
+        && !user.got_notification_after48h_from_last_action
+      ) {
+        sendPush(
+          'HappySneeze',
+          'If you need some help, talk to us. We are here to assist you.',
+          user.fcm_token,
+        )
+        db
+          .collection("users")
+          .doc(user.uid)
+          .update({
+            got_notification_after48h_from_last_action: true,
+          })
+      }
+    }
+  })
+  return null;
+}
+
+const sendMessageAfter6hFromFirstLogin = async (context) => {
+  const doc = db.collection('users').doc(admin_uid)
+  const adminData = await doc.get()
+  const admin_name = adminData.data().name
+
+  const users = db.collection('users')
+  const data = await users.get()
+  data.docs.forEach(user_obj => {
+    const user = user_obj.data()
+    if (
+      user.fcm_token
+      && user.first_login_at
+    ) {
+      if (
+        (user.first_login_at + (60000 * 60 * 6) < Date.now())
+        && !user.got_message_after6h_from_first_login
+      ) {
+        db
+          .collection("chats")
+          .doc(user.uid) // chat id === uid
+          .update({
+            messages: admin.firestore.FieldValue.arrayUnion({
+              text: `
+Hi${user.name ? ', '+ user.name : ''}. My name is ${admin_name} and I’m going to be your coach for the next
+40 days. Don’t hesitate to ask me any questions you might have. I’m here to help. :)
+                `,
+              createdAt: new Date(),
+              author: db.doc("users/" + admin_uid),
+            }),
+          })
+        db
+          .collection("users")
+          .doc(user.uid)
+          .update({
+            got_message_after6h_from_first_login: true,
+          })
+      }
+    }
+  })
+  return null;
+}
+
+const sendEveryDayMessage = async (context) => {
+  const users = db.collection('users')
+  const data = await users.get()
+  data.docs.forEach(user_obj => {
+    const user = user_obj.data()
+    sendPush(
+      'HappySneeze',
+      'Hey, let’s HappySneeze today!',
+      user.fcm_token,
+    )
+  })
+  return null;
+}
+
 const checkSubscription = async (context) => {
   const users = db.collection('users')
   const data = await users.get()
@@ -129,18 +235,43 @@ const checkSubscription = async (context) => {
         &&
         moment(user.created_at).add(167, 'days').endOf('day').valueOf() > now
       )
-      ||
-      (
-        moment(user.created_at).add(149, 'days').endOf('day').valueOf() < now
-        &&
-        moment(user.created_at).add(151, 'days').endOf('day').valueOf() > now
-      )
     ) {
       sendPush(
         'Subscription',
         'Your membership is about to expire',
         user.fcm_token,
       )
+    }
+    if ((
+      moment(user.created_at).add(149, 'days').endOf('day').valueOf() < now
+      &&
+      moment(user.created_at).add(151, 'days').endOf('day').valueOf() > now
+    )) {
+      sendPush(
+        'Subscription',
+        'Your subscription ends in one month. We will miss you!',
+        user.fcm_token,
+      )
+    }
+    if ((
+      moment(user.created_at).add(172, 'days').endOf('day').valueOf() < now
+      &&
+      moment(user.created_at).add(174, 'days').endOf('day').valueOf() > now
+    )) {
+      db
+        .collection("chats")
+        .doc(user.uid) // chat id === uid
+        .update({
+          messages: admin.firestore.FieldValue.arrayUnion({
+            text: `
+I hope I have been able to provide the help you needed during these days.
+It’s a happy goodbye! We hope you leave us much better than when you came.
+Have tones of HappySneezes, smiles, jumps...
+                `,
+            createdAt: new Date(),
+            author: db.doc("users/" + admin_uid),
+          }),
+        })
     }
   })
   return null;
@@ -516,7 +647,7 @@ const createSecondExcelFile = async (change, context) => {
     })
 
     let name = moment().format('MMMM-DD-YYYY___h-mm-ss')
-    name = 'second_'+ name
+    name = 'second_' + name
     const tempLocalFile = os.tmpdir() + '/' + name + '.xlsx'
     return workbook.xlsx.writeFile(tempLocalFile).then(async () => {
       await admin.storage().bucket('gs://happysneeze---app.appspot.com').upload(tempLocalFile, {
@@ -539,10 +670,14 @@ module.exports = {
   sendNotificationWhenNewMessage: functions.firestore
     .document('chats/{userId}')
     .onUpdate(sendNotificationWhenNewMessage),
-  //check: functions.pubsub.schedule('every 1 minutes').onRun(check),
+  sendMessageAfter6hFromFirstLogin: functions.pubsub.schedule('every 5 minutes').onRun(sendMessageAfter6hFromFirstLogin),
+  checkUsersLastActions: functions.pubsub.schedule('every 30 minutes').onRun(checkUsersLastActions),
   check: functions.pubsub.schedule('00 09 * * *')
     .timeZone('America/Los_Angeles') // Users can choose timezone - default is America/Los_Angeles // Europe/Kiev
     .onRun(check),
+  sendEveryDayMessage: functions.pubsub.schedule('00 12 * * *')
+    .timeZone('America/Los_Angeles') // Users can choose timezone - default is America/Los_Angeles // Europe/Kiev
+    .onRun(sendEveryDayMessage),
   checkSubscription: functions.pubsub.schedule('5 10 * * *')
     .timeZone('America/Los_Angeles')
     .onRun(checkSubscription),
