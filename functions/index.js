@@ -75,6 +75,7 @@ const createProfile = async (userRecord, context) => {
       got_notification_after48h_from_last_action: false,
       first_login_at: null,
       got_message_after6h_from_first_login: false,
+      unread_messages_count: 0,
     })
     .catch(console.error);
 };
@@ -561,7 +562,7 @@ const createSecondExcelFile = async (change, context) => {
 
       if (user.progress_check_days_completed_dates?.length) {
         userResults.completion = user.progress_check_days_completed_dates.reduce((res, curent) => {
-          return (res + [10, 20, 30, 40].some(n => n === curent.day) ? 25 : 0)
+          return (res + ([1, 10, 20, 30, 40].some(n => n === curent.day) ? 20 : 0))
         }, 0)
         if (userResults.completion) {
           total.completion.usersCount++
