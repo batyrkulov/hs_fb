@@ -1,6 +1,7 @@
 const admin = require('firebase-admin')
 const functions = require("firebase-functions");
 const moment = require("moment");
+const moment2 = require('moment-timezone');
 //const xl = require('excel4node');
 //const excel = require("exceljs")
 const ExcelJS = require('exceljs');
@@ -10,7 +11,6 @@ const os = require('os');
 admin.initializeApp();
 
 const db = admin.firestore();
-
 
 /**
  * Creates a document with ID -> uid in the `Users` collection.
@@ -163,6 +163,7 @@ const checkUsersLastActions = async (context) => {
 }
 
 const sendMessageAfter6hFromFirstLogin = async (context) => {
+  // 6h changed to 2h
   const doc = db.collection('users').doc(admin_uid)
   const adminData = await doc.get()
   const admin_name = adminData.data().name
@@ -176,7 +177,7 @@ const sendMessageAfter6hFromFirstLogin = async (context) => {
       && user.first_login_at
     ) {
       if (
-        (user.first_login_at + (60000 * 60 * 6) < Date.now())
+        (user.first_login_at + (60000 * 60 * 2) < Date.now())
         && !user.got_message_after6h_from_first_login
       ) {
         db
@@ -185,8 +186,7 @@ const sendMessageAfter6hFromFirstLogin = async (context) => {
           .update({
             messages: admin.firestore.FieldValue.arrayUnion({
               text: `
-Hi${user.name ? ', '+ user.name : ''}. My name is ${admin_name} and I’m going to be your coach for the next
-40 days. Don’t hesitate to ask me any questions you might have. I’m here to help. :)
+Hi${user.name ? ', ' + user.name : ''}. My name is ${admin_name} and I will be your guide for the next 40 Days. Don’t hesitate to ask me any questions you might have. I’m here to help. :)
                 `,
               createdAt: new Date(),
               author: db.doc("users/" + admin_uid),
@@ -279,6 +279,67 @@ Have tones of HappySneezes, smiles, jumps...
 }
 
 const createExcelFile = async (change, context) => {
+  const times = {
+    names: [
+      'ECT',
+      'CET',
+      'EAT',
+      'MET',
+      'NET',
+      'PLT',
+      'IST',
+      'BST',
+      'VST',
+      'CTT',
+      'JST',
+      'ACT',
+      'AET',
+      'SST',
+      'NST',
+  
+      'MIT',
+      'HST',
+      'AST',
+      'PST',
+      'PNT',
+      'CST',
+      'EST',
+      'PRT',
+      'CNT',
+      'AGT',
+      'CAT',
+    ],
+    offsetFromUtc: [
+      '-60',
+      '-120',
+      '-180',
+      '-210',
+      '-240',
+      '-300',
+      '-330',
+      '-360',
+      '-420',
+      '-480',
+      '-540',
+      '-570',
+      '-630',
+      '-690',
+      '-750',
+  
+      '750',
+      '690',
+      '570',
+      '540',
+      '480',
+      '420',
+      '330',
+      '300',
+      '240',
+      '210',
+      '60',
+    ],
+  }
+
   const excelDoc = await change.after.data()
   const firestore = () => db
 
@@ -344,17 +405,33 @@ const createExcelFile = async (change, context) => {
             )
           )
         ) {
+          let completed_at_text = ''
+          let time_part = ''
+          let date_part = ''
+
+          if (user.progress_check_days_completed_dates?.some(c_date => c_date.day == day.id)) {
+            if (user?.timezone_name) {
+              time_part = moment2(user.progress_check_days_completed_dates.find(c_date => c_date.day == day.id).completed_at).tz(user.timezone_name).format('hh:mm:ss a')
+              date_part = moment2(user.progress_check_days_completed_dates.find(c_date => c_date.day == day.id).completed_at).tz(user.timezone_name).format('MM/DD/YYYY')
+            }
+            else {
+              time_part = moment(user.progress_check_days_completed_dates.find(c_date => c_date.day == day.id).completed_at).format('hh:mm:ss a')
+              date_part = moment(user.progress_check_days_completed_dates.find(c_date => c_date.day == day.id).completed_at).format('MM/DD/YYYY')
+            }
+            if (user?.timezone_offset) {
+              times.offsetFromUtc.forEach((val, i) => {
+                if (val === user.timezone_offset.toString()) completed_at_text = time_part + ' ' + times.names[i] + ' - ' + date_part
+              })
+            } else {
+              completed_at_text = time_part + ' - ' + date_part
+            }
+          }
+
           tab.otherRows.push({
             user_id: user.uid,
             name: (`${user.name || ''} ${user.surname || ''}`),
             email: user.email,
-            completed_date:
-              user.progress_check_days_completed_dates?.some(c_date => c_date.day == day.id)
-                ? moment(
-                  user.progress_check_days_completed_dates.find(c_date => c_date.day == day.id).completed_at
-                ).format('MM.DD.YYYY - hh:mm')
-                :
-                '',
+            completed_date: completed_at_text,
             ...day.questions.map((questionOfDay) => {
               let answer2obj = ''
               const found_answered_question = user.answered_questions.find(
